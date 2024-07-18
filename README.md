@@ -1,4 +1,4 @@
-# Spousal_bereavement_and_cause_specific_mortality_paper
+# Project description
 
 This is the code for the unpublished paper of "Cause-Specific Mortality After Spousal Bereavement: A Danish Register-based Cohort Study of 223,500 Older Adults".
 
@@ -6,7 +6,8 @@ This is the code for the unpublished paper of "Cause-Specific Mortality After Sp
 *** INSERT ABSTRACT ***
 
 
-**3 files are presented:**
+**4 files are presented:**
+- R packages: R version and packages used with references
 - Data preprocessing: merging data and tidying the data for analysis
 - Analysis I: the average bereavement effect on cause-specific mortality
 - Analysis II: predicting cause-specific mortality

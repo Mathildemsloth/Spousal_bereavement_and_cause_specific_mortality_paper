@@ -1,0 +1,497 @@
+---
+title: "Modelling"
+output: html_document
+date: "2023-09-22"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# ATE analysis
+
+Load libraries
+
+```{r}
+library(riskRegression)
+library(dplyr)
+library(survival)
+library(Publish)
+library(rms)
+library(rsample)
+library(lubridate)
+library(xlsx)
+library(data.table)
+```
+
+#### Load data frame
+
+```{r}
+df <- read.csv(".....csv")
+```
+
+#### Set covariates as factors 
+
+```{r}
+df$children_n.factor <- as.factor(df$children_n.factor)
+df$comorbidities_factor <- as.factor(df$comorbidities_factor)
+df$immigration_status <- as.factor(df$immigration_status)
+df$bereaved01 <- as.factor(df$bereaved01)
+df$sex <- as.factor(df$sex)
+df$age_bereavement.factor <- as.factor(df$age_bereavement.factor)
+df$affluence.factor <- as.factor(df$affluence.factor)
+
+
+df$surv_cancer <- as.factor(df$surv_cancer)
+df$surv_cardiovascular <- as.factor(df$surv_cardiovascular)
+df$surv_neuro <- as.factor(df$surv_neuro)
+df$surv_dm <- as.factor(df$surv_dm)
+df$surv_digestive <- as.factor(df$surv_digestive)
+df$surv_psychiatric <- as.factor(df$surv_psychiatric)
+df$surv_resp <- as.factor(df$surv_resp)
+```
+
+#### Check for na
+
+```{r}
+sum(is.na(df$children_n.factor))
+sum(is.na(df$comorbidities_factor))
+sum(is.na(df$immigration_status))
+sum(is.na(df$average_homecare))
+sum(is.na(df$average_primarycare))
+sum(is.na(df$average_residential))
+sum(is.na(df$average_outpatient))
+sum(is.na(df$average_inpatient))
+sum(is.na(df$sex))
+sum(is.na(df$bereaved01))
+```
+
+# Average bereavement effect (ATE)
+
+In this section we model the ATE for the 7 causes of death: cancer, cardiovascular disease, dementia or Parkinsons, diabetes, digestive diseases, psychiatric diseases or suiside and respiratory diseases.
+
+#### Distribution of covariates
+
+For this specific analysis we used a categorized version of the expenditures data.
+
+```{r}
+df <- df %>%
+  mutate(average_full_factor = case_when(average_full<0.01 ~ 1, #none
+                                        average_full >=0.01 & average_full < 1 ~ 2, #low
+                                        average_full >=1 & average_full <5 ~ 3, #some
+                                        average_full>=5 ~ 4)) #high
+
+df$average_full_factor <- as.factor(df$average_full_factor)
+
+```
+
+Look at the distribution of the covariates
+
+```{r}
+summary(utable(bereaved01 ~ sex + age_bereavement.factor + immigration_status +
+                            comorbidities_factor + affluence.factor + 
+                            children_n.factor +average_full_factor, 
+                            data = df), 
+                            show.totals = T)
+
+
+```
+
+## ATE: Sex stratified analysis
+
+The data is split into seperate daat frames for males and females
+
+```{r}
+#New dataframe with only males
+df_males <- df |> filter(sex == "1")
+
+#New dataframe with only females
+df_females <- df |> filter(sex == "2")
+
+df_males$bereaved01 <- as.factor(df_males$bereaved01)
+df_females$bereaved01 <- as.factor(df_females$bereaved01)
+
+```
+
+#### ABE, Cancer
+
+-   The *ate* function is the average treatment effect. The first term is the formula from the CSC model.
+
+```{r}
+############ Males ###########
+#cause-specific cox model (CSC)
+csc_bereavement_cancer_males <- CSC(Hist(surv_time, surv_cancer) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                    data = df_males, 
+                                    cause = "1")
+
+#average treatment effect (ATE)
+arv_bereavement_cancer_males <- ate(event = csc_bereavement_cancer_males, 
+                                    treatment = "bereaved01", 
+                                    data = df_males, 
+                                    cause = "1", 
+                                    times = c(365*3), 
+                                    estimator = "GFORMULA", 
+                                    se = TRUE, 
+                                    B = 1000, 
+                                    mc.cores = 15)
+
+
+#show results
+ABE_cancer_males <- print(setkeyv(as.data.table(arv_bereavement_cancer_males, type = c("meanRisk", "diffRisk")),"time"))
+
+
+write.xlsx(ABE_cancer_males, "....xlsx")
+
+
+################ Females ###################
+#csc
+csc_bereavement_cancer_females <- CSC(Hist(surv_time, surv_cancer) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                      data = df_females, 
+                                      cause = "1")
+
+#ate
+arv_bereavement_cancer_females <- ate(event = csc_bereavement_cancer_females, 
+                                      treatment = "bereaved01", 
+                                      data = df_females, 
+                                      cause = "1", 
+                                      times = c(365*3), 
+                                      estimator = "GFORMULA",  
+                                      se = TRUE, 
+                                      B = 1000, 
+                                      mc.cores = 15)
+
+
+#show results
+ABE_cancer_females <- print(setkeyv(as.data.table(arv_bereavement_cancer_females, type = c("meanRisk", "diffRisk")),"time"))
+
+
+write.xlsx(ABE_cancer_females, ".....xlsx")
+
+```
+
+#### ABE, cardio and vascular disease
+
+```{r}
+############ Males ###########
+
+#csc
+csc_bereavement_cardiovascular_males <- CSC(Hist(surv_time, surv_cardiovascular) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_males, cause = "1")
+
+#ate
+arv_bereavement_cardiovascular_males <- ate(event = csc_bereavement_cardiovascular_males, 
+                                            treatment = "bereaved01", 
+                                            data = df_males, 
+                                            cause = "1", 
+                                            times = c(365*3), 
+                                            estimator = "GFORMULA",  
+                                            se = TRUE, 
+                                            B = 1000, 
+                                            mc.cores = 15)
+
+
+#show results
+ABE_cardiovascular_males <- print(setkeyv(as.data.table(arv_bereavement_cardiovascular_males, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_cardiovascular_males, ".....xlsx")
+
+
+
+
+################ Females ###################
+
+#csc
+csc_bereavement_cardiovascular_females <- CSC(Hist(surv_time, surv_cardiovascular) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                              data = df_females, 
+                                              cause = "1")
+
+#ate
+arv_bereavement_cardiovascular_females <- ate(event = csc_bereavement_cardiovascular_females, 
+                                              treatment = "bereaved01", 
+                                              data = df_females, 
+                                              cause = "1", 
+                                              times = c(365*3), 
+                                              estimator = "GFORMULA", 
+                                              se = TRUE, 
+                                              B = 1000, 
+                                              mc.cores = 15)
+
+
+#show results
+ABE_cardiovascular_females <- print(setkeyv(as.data.table(arv_bereavement_cardiovascular_females, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_cardiovascular_females, "......xlsx")
+
+```
+
+#### ABE, Dementia and Parkinsons
+
+```{r}
+
+############ Males ###########
+
+#csc
+csc_bereavement_neuro_males <- CSC(Hist(surv_time, surv_neuro) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_males, cause = "1")
+
+#ate
+arv_bereavement_neuro_males <- ate(event = csc_bereavement_neuro_males, 
+                                   treatment = "bereaved01", 
+                                   data = df_males, 
+                                   cause = "1", 
+                                   times = c(365*3), 
+                                   estimator = "GFORMULA", 
+                                   se = TRUE, 
+                                   B = 1000, 
+                                   mc.cores = 15)
+
+
+#show results
+ABE_neuro_males <- print(setkeyv(as.data.table(arv_bereavement_neuro_males, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_neuro_males, ".....xlsx")
+
+
+################ Females ###################
+#csc
+csc_bereavement_neuro_females <- CSC(Hist(surv_time, surv_neuro) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                     data = df_females, 
+                                     cause = "1")
+
+#ate
+arv_bereavement_neuro_females <- ate(event = csc_bereavement_neuro_females, 
+                                     treatment = "bereaved01", 
+                                     data = df_females, 
+                                     cause = "1", 
+                                     times = c(365*3), 
+                                     estimator = "GFORMULA", 
+                                     se = TRUE, 
+                                     B = 1000, 
+                                     mc.cores = 15)
+
+
+#show results
+ABE_neuro_females <- print(setkeyv(as.data.table(arv_bereavement_neuro_females, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_neuro_females, "......xlsx")
+
+
+```
+
+#### ABE, Diabetes
+
+```{r}
+############ Males ###########
+
+#csc
+csc_bereavement_dm_males <- CSC(Hist(surv_time, surv_dm) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                data = df_males, 
+                                cause = "1")
+
+#ate
+arv_bereavement_dm_males <- ate(event = csc_bereavement_dm_males, 
+                                treatment = "bereaved01", 
+                                data = df_males, 
+                                cause = "1", 
+                                times = c(365*3), 
+                                estimator = "GFORMULA", 
+                                se = TRUE, 
+                                B = 1000, 
+                                mc.cores = 15)
+
+
+
+#show results
+ABE_dm_males <- print(setkeyv(as.data.table(arv_bereavement_dm_males, type = c("meanRisk", "diffRisk")),"time"))
+
+
+write.xlsx(ABE_dm_males, ".....xlsx")
+
+
+################ Females ###################
+
+
+#csc
+csc_bereavement_dm_females <- CSC(Hist(surv_time, surv_dm) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                  data = df_females, 
+                                  cause = "1")
+
+#ate
+arv_bereavement_dm_females <- ate(event = csc_bereavement_dm_females, 
+                                  treatment = "bereaved01", 
+                                  data = df_females, 
+                                  cause = "1", 
+                                  times = c(365*3), 
+                                  estimator = "GFORMULA", 
+                                  se = TRUE, 
+                                  B = 1000, 
+                                  mc.cores = 15)
+
+
+#show results
+ABE_dm_females <- print(setkeyv(as.data.table(arv_bereavement_dm_females, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_dm_females, ".....xlsx")
+```
+
+#### ABE, Diseases related to the digestive system
+
+```{r}
+############ Males ###########
+
+#csc
+csc_bereavement_digestive_males <- CSC(Hist(surv_time, surv_digestive) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                       data = df_males, 
+                                       cause = "1")
+
+#ate
+arv_bereavement_digestive_males <- ate(event = csc_bereavement_digestive_males, 
+                                       treatment = "bereaved01", 
+                                       data = df_males, 
+                                       cause = "1", 
+                                       times = c(365*3), 
+                                       estimator = "GFORMULA", 
+                                       se = TRUE, 
+                                       B = 1000, 
+                                       mc.cores = 15)
+
+
+
+#show results
+ABE_digestive_males <- print(setkeyv(as.data.table(arv_bereavement_digestive_males, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_digestive_males, ".....xlsx")
+
+################ Females ###################
+
+#csc
+csc_bereavement_digestive_females <- CSC(Hist(surv_time, surv_digestive) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                         data = df_females, 
+                                         cause = "1")
+
+#ate
+arv_bereavement_digestive_females <- ate(event = csc_bereavement_digestive_females, 
+                                         treatment = "bereaved01", 
+                                         data = df_females, 
+                                         cause = "1", 
+                                         times = c(365*3),
+                                         estimator = "GFORMULA", 
+                                         se = TRUE, 
+                                         B = 1000, 
+                                         mc.cores = 15)
+
+
+#show results
+ABE_digestive_females <- print(setkeyv(as.data.table(arv_bereavement_digestive_females, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_digestive_females, "....xlsx")
+
+```
+
+#### ABE, Psychiatric diseases and suicide
+
+```{r}
+############ Males ###########
+#csc
+csc_bereavement_psychiatric_males <- CSC(Hist(surv_time, surv_psychiatric) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                         data = df_males, 
+                                         cause = "1")
+
+#ate
+arv_bereavement_psychiatric_males <- ate(event = csc_bereavement_psychiatric_males, 
+                                         treatment = "bereaved01", 
+                                         data = df_males, 
+                                         cause = "1", 
+                                         times = c(365*3), 
+                                         estimator = "GFORMULA", 
+                                         se = TRUE, 
+                                         B = 1000, 
+                                         mc.cores = 15)
+
+
+
+#show results
+ABE_psychiatric_males <- print(setkeyv(as.data.table(arv_bereavement_psychiatric_males, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_psychiatric_males, "....xlsx")
+
+
+################ Females ###################
+
+#csc
+csc_bereavement_psychiatric_females <- CSC(Hist(surv_time, surv_psychiatric) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                           data = df_females, 
+                                           cause = "1")
+
+#ate
+arv_bereavement_psychiatric_females <- ate(event = csc_bereavement_psychiatric_females, 
+                                           treatment = "bereaved01", 
+                                           data = df_females, 
+                                           cause = "1", 
+                                           times = c(365*3), 
+                                           estimator = "GFORMULA", 
+                                           se = TRUE, 
+                                           B = 1000, 
+                                           mc.cores = 15)
+
+
+#show results
+ABE_psychiatric_females <- print(setkeyv(as.data.table(arv_bereavement_psychiatric_females, type = c("meanRisk", "diffRisk")),"time"))
+
+
+write.xlsx(ABE_psychiatric_females, ".....xlsx")
+```
+
+#### ABE, Respiratory diseases
+
+```{r}
+############ Males ###########
+
+#csc
+csc_bereavement_resp_males <- CSC(Hist(surv_time, surv_resp) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                  data = df_males, 
+                                  cause = "1")
+
+#ate
+arv_bereavement_resp_males <- ate(event = csc_bereavement_resp_males, 
+                                  treatment = "bereaved01", 
+                                  data = df_males, 
+                                  cause = "1", 
+                                  times = c(365*3), 
+                                  estimator = "GFORMULA", 
+                                  se = TRUE, 
+                                  B = 1000, 
+                                  mc.cores = 15)
+
+
+
+#show results
+ABE_resp_males <- print(setkeyv(as.data.table(arv_bereavement_resp_males, type = c("meanRisk", "diffRisk")),"time"))
+
+
+write.xlsx(ABE_resp_males, ".....xlsx")
+
+################ Females ###################
+
+#csc
+csc_bereavement_resp_females <- CSC(Hist(surv_time, surv_resp) ~ bereaved01 +  age_bereavement.factor + children_n.factor + average_full_factor  + affluence.factor + children_n.factor + comorbidities_factor + immigration_status, 
+                                    data = df_females, 
+                                    cause = "1")
+
+#ate
+arv_bereavement_resp_females <- ate(event = csc_bereavement_resp_females, 
+                                    treatment = "bereaved01", 
+                                    data = df_females, 
+                                    cause = "1", 
+                                    times = c(365*3), 
+                                    estimator = "GFORMULA", 
+                                    se = TRUE, 
+                                    B = 1000, 
+                                    mc.cores = 15)
+
+
+#show results
+ABE_resp_females <- print(setkeyv(as.data.table(arv_bereavement_resp_females, type = c("meanRisk", "diffRisk")),"time"))
+
+write.xlsx(ABE_resp_females, "......xlsx")
+```

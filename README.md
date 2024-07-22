@@ -5,7 +5,7 @@ This is the code for the unpublished paper of "Cause-Specific Mortality After Sp
 The coding has been done by Mathilde Marie Brünnich Sloth and Alexandros Katsiferis
 
 
-*** INSERT ABSTRACT ***
+*** INSERT ABSTRACT upon approval for publication***
 
 
 **4 files are presented:**

@@ -1,6 +1,7 @@
 # Project description
 
 This is the code for the unpublished paper of "Cause-Specific Mortality After Spousal Bereavement: A Danish Register-based Cohort Study of 223,500 Older Adults".
+
 The coding has been done by Mathilde Marie Brünnich Sloth and Alexandros Katsiferis
 
 

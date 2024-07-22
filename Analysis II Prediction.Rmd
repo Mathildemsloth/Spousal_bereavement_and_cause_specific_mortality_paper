@@ -1,0 +1,1511 @@
+---
+title: "Prediction"
+output: html_document
+date: "2023-09-26"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Predicting cause specific death
+
+Load libraries
+
+```{r}
+library(riskRegression)
+library(dplyr)
+library(survival)
+library(Publish)
+library(rms)
+library(rsample)
+library(lubridate)
+library(tidymodels)
+library(xlsx)
+library(finetune) #tuning hyperparameters
+library(DALEX) #explainability
+library(DALEXtra) #explainability
+library(ingredients) #explainability
+library(ggsci) #colours for plots
+library(patchwork) #arrangeing plots together
+library(extrafont) #fonts for ggplot
+```
+
+Load data
+
+```{r}
+df <- read.csv("....csv")
+```
+
+Format as factor
+
+```{r}
+df$children_n.factor <- as.factor(df$children_n.factor)
+df$comorbidities_factor <- as.factor(df$comorbidities_factor)
+df$immigration_status <- as.factor(df$immigration_status)
+df$bereaved01 <- as.factor(df$bereaved01)
+df$surv_cancer <- as.factor(df$surv_cancer)
+df$surv_cardiovascular <- as.factor(df$surv_cardiovascular)
+df$surv_neuro <- as.factor(df$surv_neuro)
+df$surv_dm <- as.factor(df$surv_dm)
+df$surv_digestive <- as.factor(df$surv_digestive)
+df$surv_psychiatric <- as.factor(df$surv_psychiatric)
+df$surv_resp <- as.factor(df$surv_resp)
+
+df <- df |> 
+  mutate_if(is.character,as.factor)
+
+df <- df |> 
+  select(-EXCLUDE, -EXCLUDE_REASON)
+```
+
+## Binary outcome
+
+Death due to specific causes is remade into a binary framework with 0 being alive or dying from another cause and 1 being dying from the cause in focus.
+
+```{r}
+df <- df |> 
+  mutate(surv_cancer01 = if_else(surv_cancer==0 | surv_cancer==2, 0, 1)) |> 
+  mutate(surv_CVD01 = if_else(surv_cardiovascular==0 | surv_cardiovascular==2, 0, 1)) |> 
+  mutate(surv_neuro01 = if_else(surv_neuro==0 | surv_neuro==2, 0, 1)) |> 
+  mutate(surv_dm01 = if_else(surv_dm==0 | surv_dm==2, 0, 1)) |> 
+  mutate(surv_digestive01 = if_else(surv_digestive==0 | surv_digestive==2, 0, 1)) |> 
+  mutate(surv_psychiatric01 = if_else(surv_psychiatric==0 | surv_psychiatric==2, 0, 1)) |>
+  mutate(surv_respiratory01 = if_else(surv_resp==0 | surv_resp==2, 0, 1))
+```
+
+## Survival (1 year and 3 years)
+
+Computing a binary variable for 1 and 3-year survival for each cause of death.
+
+```{r}
+df <- df |> 
+  mutate(surv_cancer3 = if_else(surv_cancer == 1 & surv_time <= 1095.75, 1,0),
+         surv_CVD3 =  if_else(surv_cardiovascular == 1 & surv_time <= 1095.75, 1,0),
+         surv_neuro3 =  if_else(surv_neuro == 1 & surv_time <= 1095.75, 1,0),
+         surv_dm3 =  if_else(surv_dm == 1 & surv_time <= 1095.75, 1,0),
+         surv_digestive3 =  if_else(surv_digestive == 1 & surv_time <= 1095.75, 1,0),
+         surv_psychiatric3 =  if_else(surv_psychiatric == 1 & surv_time <= 1095.75, 1,0),
+         surv_psychiatric2 =  if_else(surv_psychiatric == 1 & surv_time <= 730.5, 1,0),
+         surv_psychiatric1 =  if_else(surv_psychiatric == 1 & surv_time <= 365.25, 1,0),
+         surv_respiratory3 =  if_else(surv_resp == 1 & surv_time <= 1095.75, 1,0),
+         surv_overall3 =  if_else(surv_overall == 1 & surv_time <= 1095.75, 1,0)) |> 
+  mutate(surv_cancer3 = as.factor(surv_cancer3),
+         surv_CVD3 = as.factor(surv_CVD3),
+         surv_neuro3 = as.factor(surv_neuro3),
+         surv_dm3 = as.factor(surv_dm3),
+         surv_digestive3 = as.factor(surv_digestive3),
+         surv_psychiatric3 = as.factor(surv_psychiatric3),
+         surv_psychiatric2 = as.factor(surv_psychiatric2),
+         surv_psychiatric1 = as.factor(surv_psychiatric1),
+         surv_respiratory3 = as.factor(surv_respiratory3) )
+
+
+df |> janitor::tabyl(surv_cancer3)
+```
+
+## Levels
+
+```{r}
+#Naming the categories of the survival variable.
+levels(df$surv_overall)[levels(df$surv_overall)== 0] <- 'Alive'
+levels(df$surv_overall)[levels(df$surv_overall)== 1] <- 'Dead'
+
+# Also the sex variable
+df <- df %>% 
+  mutate(sex = if_else(KOEN == 2, "Females", "Males")) %>% 
+  mutate_at(vars(sex),as.factor)
+```
+
+## Prediction
+
+First step of the prediction modelling is a data split into train/test.
+
+```{r}
+set.seed(29)
+
+df_split <- initial_split(df)
+
+df_train <- training(df_split)
+
+df_test <- testing(df_split)
+```
+
+Descriptive statistics
+
+```{r}
+df_train$TRAIN <- "TRUE"
+df_test$TEST <- "TRUE"
+
+df_look <- df_train |>
+  full_join(df_test) |> 
+  mutate(TRAIN_TEST = case_when(TRAIN == "TRUE" ~ "TRAIN", 
+                                TEST == "TRUE" ~ "TEST"))
+
+#look at the distribution of the outcome with the utable function
+death_cause_tabel <- utable(TRAIN_TEST ~ surv_cancer3 + surv_CVD3 + surv_neuro3 + surv_dm3 + surv_digestive3 + surv_psychiatric3 + surv_respiratory3 + surv_overall3, data = df_look) 
+
+#Cause of death table
+death_cause_tabel <- summary(death_cause_tabel)
+write.xlsx(death_cause_tabel, "....xls")
+
+#same for males and females sep
+death_cause_tabel_sex <- utable(sex ~ surv_cancer3 + surv_CVD3 + surv_neuro3 + surv_dm3 + surv_digestive3 + surv_psychiatric3 + surv_respiratory3 , data = df_look) 
+death_cause_tabel_sex_table <- summary(death_cause_tabel_sex)
+write.xlsx(death_cause_tabel_sex_table, "....xls")
+
+#table 1
+table_1 <- summary(utable(TRAIN_TEST ~ bereaved01 + sex + age_bereavement.factor + immigration_status + comorbidities_factor + children_n.factor + affluence.factor + average_full + average_prescription + average_homecare + average_residential + average_primarycare + average_outpatient + average_inpatient, 
+               data = df_look, show.totals = T, summary.format = "median(x) [iqr(x)]"))
+
+
+
+df_look <- df_look %>%
+  mutate(average_full_factor = case_when(average_full<0.01 ~ 1, #none
+                                        average_full >=0.01 & average_full < 1 ~ 2, #low
+                                        average_full >=1 & average_full <5 ~ 3, #some
+                                        average_full>=5 ~ 4)) #high
+
+df_look$average_full_factor <- as.factor(df_look$average_full_factor)
+
+table_1 <- summary(utable(TRAIN_TEST ~ bereaved01 + sex + age_bereavement.factor + immigration_status + comorbidities_factor + children_n.factor + affluence.factor + average_full_factor, 
+               data = df_look, show.totals = T))
+
+write.xlsx(table_1, "....xls")
+
+
+subset_test <- subset(df_look, TRAIN_TEST= "TEST" )
+subset_train <- subset(df_look, TRAIN_TEST= "TRAIN" )
+
+#prescription
+quantile(df_look$average_prescription, prob=c(.05,.95))
+quantile(subset_train$average_prescription, prob=c(.05,.95))
+quantile(subset_test$average_prescription, prob=c(.05,.95)) 
+
+#homecare
+quantile(df_look$average_homecare, prob=c(.05,.95))
+quantile(subset_train$average_homecare, prob=c(.05,.95))
+quantile(subset_test$average_homecare, prob=c(.05,.95)) 
+
+#residential care
+quantile(df_look$average_residential, prob=c(.05,.95))
+quantile(subset_train$average_residential, prob=c(.05,.95))
+quantile(subset_test$average_residential, prob=c(.05,.95)) 
+
+#primary care
+quantile(df_look$average_primarycare, prob=c(.05,.95))
+quantile(subset_train$average_primarycare, prob=c(.05,.95))
+quantile(subset_test$average_primarycare, prob=c(.05,.95)) 
+
+#outpatient
+quantile(df_look$average_outpatient, prob=c(.05,.95))
+quantile(subset_train$average_outpatient, prob=c(.05,.95))
+quantile(subset_test$average_outpatient, prob=c(.05,.95)) 
+
+#inpatient
+quantile(df_look$average_inpatient, prob=c(.05,.95))
+quantile(subset_train$average_inpatient, prob=c(.05,.95))
+quantile(subset_test$average_inpatient, prob=c(.05,.95)) 
+
+#medians with more decimal points
+median(df_look$average_prescription)
+median(subset_train$average_prescription)
+median(subset_test$average_prescription)
+
+median(df_look$average_homecare)
+
+median(df_look$average_residential)
+
+median(df_look$average_primarycare)
+
+median(df_look$average_outpatient)
+
+median(df_look$average_inpatient)
+```
+
+### Logistic regression
+
+First model for the prediction modelling is logistic regression models. Three prediction models for each cause of death will be performed:
+
+-   LRM null: a logistic regression model (LRM) without any predictors
+
+-   LRM simple: a LRM with the predictors age, sex and bereavement
+
+-   LRM NO-Exp: a LRM with all predictors except healthcare expenditures
+
+-   LRM full: a LRM with all predictors: age, sex, bereavement, affluence, immigration status, number of children, number of comorbidities, and expenditures with restricted cubic splines with 3 knots.
+
+Investigating the predicted risks for 3 year mortality of cause-specific death.
+
+Specify data distance
+
+```{r}
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+```
+
+##### Cancer
+
+```{r}
+#Null model
+fit0_cancer <- glm(surv_cancer3 ~ 1, data = df_train, family = "binomial",x = T, y = T)
+
+#simple model with age and sex
+fit_cancer_simple <- lrm(surv_cancer3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_cancer_noexp <- lrm(surv_cancer3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T) 
+
+#model with expenditures as arv.
+fit_cancer_arv <- lrm(surv_cancer3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient,3) + rcs(average_outpatient,3) +  rcs(average_prescription,3) + rcs(average_primarycare,3) + rcs(average_residential,3) + rcs(average_homecare,3), data = df_train, x = T, y = T)
+
+
+#check spline possible fit
+df_train$cancer_risk <- predictRisk(fit_cancer_arv, newdata = df_train)
+plot(df_train$average_inpatient, df_train$cancer_risk)
+plot(df_train$average_outpatient, df_train$cancer_risk)
+plot(df_train$average_prescription, df_train$cancer_risk)
+plot(df_train$average_homecare, df_train$cancer_risk)
+plot(df_train$average_residential, df_train$cancer_risk)
+plot(df_train$average_primarycare, df_train$cancer_risk)
+```
+
+Evaluating the scores
+
+```{r}
+df_test <- data.table::as.data.table(df_test)
+
+fit_cancer_total_score <- Score(object = 
+                          list("LRM Simple Model" = fit_cancer_simple,
+                                "LRM Full Model, each arv exp" = fit_cancer_arv,
+                                "LRM Null" = fit0_cancer,
+                               "LRM NO-Exp" = fit_cancer_noexp),
+                    data = df_test,
+                    formula = surv_cancer3 ~ 1,
+                    metrics = c("auc","brier"),summary = "ipa",plots = "cal",
+                    se.fit = T,  null.model = T) 
+  
+summary(fit_cancer_total_score)
+
+plotCalibration(fit_cancer_total_score, models = "LRM Full Model, each arv exp")
+```
+
+##### Cardio and vascular diseases
+
+```{r}
+#Null model
+fit0_cv <- glm(surv_CVD3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
+
+#simple model with age and sex
+fit_cv_simple <- lrm(surv_CVD3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_cv_noexp <- lrm(surv_CVD3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+
+#model with expenditures as arv.
+fit_cv_arv <- lrm(surv_CVD3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+            data = df_train, x = T, y = T)
+```
+
+Evaluating the scores
+
+```{r}
+fit_cv_total_score <- Score(object = 
+                            list("LRM Simple Model" = fit_cv_simple,
+                                 "LRM Full Model, each arv exp" = fit_cv_arv,
+                                 "LRM Null" = fit0_cv,
+                                 "LRM NO-Exp" = fit_cv_noexp),
+                    data = df_test,
+                    formula = surv_CVD3 ~ 1,
+                    metrics = c("auc","brier"), summary = "ipa", plots = "cal",
+                    se.fit = T, null.model = T)
+
+summary(fit_cv_total_score)
+
+plotCalibration(fit_cv_total_score, models = "LRM Full Model, each arv exp")
+plotCalibration(fit_cv_total_score, models = "LRM Simple Model")
+```
+
+##### Dementia and Parkinson disease
+
+```{r}
+#Null model
+fit0_neuro <- glm(surv_neuro3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
+
+#simple model with age and sex
+fit_neuro_simple <- lrm(surv_neuro3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_neuro_noexp <- lrm(surv_neuro3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+
+#model with expenditures as arv.
+fit_neuro_arv <- lrm(surv_neuro3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+            data = df_train, x = T, y = T)
+```
+
+Evaluate the scores
+
+```{r}
+fit_neuro_total_score <- Score(object = 
+                        list("LRM Simple Model" = fit_neuro_simple,
+                             "LRM Full Model, each arv exp" = fit_neuro_arv,
+                             "LRM Null" = fit0_neuro,
+                             "LRM-NO Exp" = fit_neuro_noexp),
+                    data = df_test,
+                    formula = surv_neuro3 ~ 1,
+                    metrics = c("auc","brier"), summary = "ipa",plots = "cal",
+                    se.fit = T, 
+                     null.model = T)
+
+summary(fit_neuro_total_score)
+
+plotCalibration(fit_neuro_total_score)
+```
+
+##### Diabetes
+
+```{r}
+#Null model
+fit0_dm <- glm(surv_dm3 ~ 1, data = df_train, family = "binomial")
+
+#simple model with age and sex
+fit_dm_simple <- lrm(surv_dm3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_dm_noexp <- lrm(surv_dm3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+
+#model with expenditures as arv.
+fit_dm_arv <- lrm(surv_dm3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+            data = df_train, x = T, y = T)
+```
+
+Evaluate score
+
+```{r}
+fit_dm_total_score <- Score(object = 
+                            list("LRM Simple Model" = fit_dm_simple,
+                                 "LRM Full Model, each arv exp" = fit_dm_arv,
+                                 "LRM Null" = fit0_dm,
+                                 "LRM-NO Exp" = fit_dm_noexp), 
+                    data = df_test,
+                    formula = surv_dm3 ~ 1,
+                    metrics = c("auc","brier"),summary = "ipa",plots = "cal",
+                    se.fit = T,
+                    null.model = T)
+
+summary(fit_dm_total_score)
+
+plotCalibration(fit_dm_total_score, models = "LRM Full Model, each arv exp",round = F)
+
+plot(nomogram(fit_dm_arv, fun = plogis, funlabel = paste0("Risk of Diabetes")))
+```
+
+##### Diseases related to the digestive system
+
+```{r}
+#Null model
+fit0_digestive <- glm(surv_digestive3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
+
+#simple model with age and sex
+fit_digestive_simple <- lrm(surv_digestive3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_digestive_noexp <- lrm(surv_digestive3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+
+#model with expenditures as arv.
+fit_digestive_arv <- lrm(surv_digestive3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+            data = df_train, x = T, y = T)
+```
+
+Evaluate score
+
+```{r}
+fit_digestive_total_score <- Score(object = 
+                            list("LRM Simple Model" = fit_digestive_simple,
+                                 "LRM Full Model, each arv exp" = fit_digestive_arv,
+                                 "LRM Null" = fit0_digestive,
+                                 "LRM-NO Exp" = fit_digestive_noexp),
+                    data = df_test,
+                    formula = surv_digestive3 ~ 1,
+                    metrics = c("auc","brier"),summary = "ipa",plots = "cal",
+                    se.fit = T,
+                    null.model = T)
+
+summary(fit_digestive_total_score)
+
+plotCalibration(fit_digestive_total_score, models = "LRM Full Model, each arv exp", round = F)
+
+plot(nomogram(fit_digestive_arv, fun = plogis, funlabel = paste0("Risk of digestive diseases")))
+```
+
+##### Psychiatric diseases and suicide
+
+```{r}
+#Null model
+fit0_psychiatric <- glm(surv_psychiatric3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
+
+#simple model with age and sex
+fit_psychiatric_simple <- lrm(surv_psychiatric3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_psychiatric_noexp <- lrm(surv_psychiatric3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)
+
+#model with expenditures as arv.
+fit_psychiatric_arv <- lrm(surv_psychiatric3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+            data = df_train, x = T, y = T)
+```
+
+Evaluate score
+
+```{r}
+fit_psychiatric_total_score <- Score(object = 
+                            list("LRM Simple Model" = fit_psychiatric_simple,
+                                 "LRM Full Model, each arv exp" = fit_psychiatric_arv,
+                                 "LRM Null" = fit0_psychiatric,
+                                 "LRM-NO Exp" = fit_psychiatric_noexp),
+                    data = df_test,
+                    formula = surv_psychiatric3 ~ 1,
+                    metrics = c("auc","brier"), summary = "ipa", plots = "cal",
+                    se.fit = T,  null.model = T)
+
+summary(fit_psychiatric_total_score)
+
+plotCalibration(fit_psychiatric_total_score, models = "LRM Full Model, each arv exp", round = F)
+
+plot(nomogram(fit_psychiatric_arv, fun = plogis, funlabel = paste0("Risk of psychiatric diseases")))
+```
+
+##### Respiratory diseases
+
+```{r}
+#Null model
+fit0_resp <- glm(surv_respiratory3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
+
+#simple model with age and sex
+fit_resp_simple <- lrm(surv_respiratory3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+
+# model with sociodemographics + number of comorbidities
+fit_resp_noexp <- lrm(surv_respiratory3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+
+#model with expenditures as arv.
+fit_resp_arv <- lrm(surv_respiratory3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+            data = df_train, x = T, y = T)
+```
+
+Evaluate score
+
+```{r}
+fit_resp_total_score <- Score(object = 
+                         list("LRM Simple Model" = fit_resp_simple,
+                              "LRM Full Model, each arv exp" = fit_resp_arv,
+                              "LRM Null" = fit0_resp,
+                              "LRM-NO Exp" = fit_resp_noexp),
+                    data = df_test,
+                    formula = surv_respiratory3 ~ 1,
+                    metrics = c("auc","brier"),summary = "ipa", plots = "cal",
+                    se.fit = T, 
+                    null.model = T)
+
+summary(fit_resp_total_score)
+
+plotCalibration(fit_resp_total_score, models = "LRM Full Model, each arv exp")
+
+plot(nomogram(fit_resp_arv, fun = plogis, funlabel = paste0("Risk of respiratory diseases")))
+```
+
+##### 
+
+### XGBoost
+
+Next model is Extreme Gradient Boosting (XGBoost) with all predictors for predicting the 3-year mortality.
+
+Cross-validations split for tuning hyper-parameters
+
+```{r}
+set.seed(29)
+
+df_train_cv <- vfold_cv(data = df_train, v = 5)
+```
+
+#### Cancer
+
+For this analysis the outcome must be a factor. Catagorical predictors should have dummy variables.
+
+-   1: get the disease (cancer) before end of follow-up
+-   0: does not get the disease (dies of something else or survives until follow-up)
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_cancer_recipe <- recipe(surv_cancer3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_cancer_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_cancer_wf <- workflow(xg_cancer_recipe, xgb_cancer_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_cancer_rs <- tune_race_anova(xgb_cancer_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_cancer_rs)
+
+#Grid of hyperparameters
+show_best(xgb_cancer_rs)
+
+
+#finalize workflow
+xgb_cancer_last <- xgb_cancer_wf |> 
+    finalize_workflow(select_best(xgb_cancer_rs, metric ='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_cancer_last |> collect_metrics()
+
+#predictions
+xgb_cancer_last |> collect_predictions()
+
+
+#group
+xgb_cancer_full_preds <- xgb_cancer_last$.predictions
+
+xgb_cancer_full_preds <- xgb_cancer_full_preds[[1]][2]
+
+xgb_cancer_full_preds <- as.matrix(xgb_cancer_full_preds)
+
+
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_cancer_total_score <- Score(list('LRM NULL' = fit0_cancer,
+                              'LRM Simple' = fit_cancer_simple,
+                              "LRM Socio + Comorbidities" = fit_cancer_noexp,
+                              'LRM Full' = fit_cancer_arv,
+                              'Xgboost Full' = xgb_cancer_full_preds), 
+                               formula = surv_cancer3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+summary(fit_cancer_total_score)
+
+plotCalibration(fit_cancer_total_score, models =  c("Xgboost Full", "LRM Full"), legend = T, auc.in.legend = F, brier.in.legend = F, col = c("#88CCEE", "#CC79A7"), rug = F, xlab = "Predicted risk of death from cancer", ylab = "Observed frequency of the predicted risk")
+```
+
+#### CVD
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_CVD_recipe <- recipe(surv_CVD3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_CVD_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_CVD_wf <- workflow(xg_CVD_recipe, xgb_CVD_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_CVD_rs <- tune_race_anova(xgb_CVD_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_CVD_rs)
+
+#Grid of hyperparameters
+show_best(xgb_CVD_rs)
+
+
+#finalize workflow
+xgb_CVD_last <- xgb_CVD_wf |> 
+    finalize_workflow(select_best(xgb_CVD_rs, metric ='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_CVD_last |> collect_metrics()
+
+#predictions
+xgb_CVD_last |> collect_predictions()
+
+#group
+xgb_CVD_full_preds <- xgb_CVD_last$.predictions
+
+xgb_CVD_full_preds <- xgb_CVD_full_preds[[1]][2]
+
+xgb_CVD_full_preds <- as.matrix(xgb_CVD_full_preds)
+
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_cvd_total_score <- Score(list('LRM NULL' = fit0_cv,
+                              'LRM Simple' = fit_cv_simple,
+                              "LRM Socio + Comorbidities" = fit_cv_noexp,
+                              'LRM Full' = fit_cv_arv,
+                              'Xgboost Full' = xgb_CVD_full_preds), 
+                               formula = surv_CVD3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+
+plotCalibration(fit_cvd_total_score, models = c("Xgboost Full", "LRM Full"), rug = F, auc.in.legend = F, brier.in.legend = F, xlab = "Predicted risk of dying from CVD", ylab = "Observed frequency of the predicted risk", col = c("#56B4E9", "#CC79A7"))
+```
+
+#### Dementia and Parkinsons
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_neuro_recipe <- recipe(surv_neuro3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_neuro_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_neuro_wf <- workflow(xg_neuro_recipe, xgb_neuro_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_neuro_rs <- tune_race_anova(xgb_neuro_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_neuro_rs)
+
+#Grid of hyperparameters
+show_best(xgb_neuro_rs)
+
+
+#finalize workflow
+xgb_neuro_last <- xgb_neuro_wf |> 
+    finalize_workflow(select_best(xgb_neuro_rs, metric ='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_neuro_last |> collect_metrics()
+
+#predictions
+xgb_neuro_last |> collect_predictions()
+
+#group
+xgb_neuro_full_preds <- xgb_neuro_last$.predictions
+
+xgb_neuro_full_preds <- xgb_neuro_full_preds[[1]][2]
+
+xgb_neuro_full_preds <- as.matrix(xgb_neuro_full_preds)
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_neuro_total_score <- Score(list('LRM NULL' = fit0_neuro,
+                              'LRM Simple' = fit_neuro_simple,
+                              "LRM Socio + Comorbidities" = fit_neuro_noexp,
+                              'LRM Full' = fit_neuro_arv,
+                              'Xgboost Full' = xgb_neuro_full_preds), 
+                               formula = surv_neuro3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+
+plotCalibration(fit_neuro_total_score, models = c("Xgboost Full", "LRM Full"), rug = F, auc.in.legend = F, brier.in.legend = F, xlab = "Predicted risk of dying from Dementia or Parkinson's disease", ylab = "Observed frequency of the predicted risk", col = c("#56B4E9", "#CC79A7"))
+```
+
+#### Diabetes
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_dm_recipe <- recipe(surv_dm3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_dm_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_dm_wf <- workflow(xg_dm_recipe, xgb_dm_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_dm_rs <- tune_race_anova(xgb_dm_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_dm_rs)
+
+#Grid of hyperparameters
+show_best(xgb_dm_rs)
+
+
+#finalize workflow
+xgb_dm_last <- xgb_dm_wf |> 
+    finalize_workflow(select_best(xgb_dm_rs, metric ='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_dm_last |> collect_metrics()
+
+#predictions
+xgb_dm_last |> collect_predictions()
+
+
+#group
+xgb_dm_full_preds <- xgb_dm_last$.predictions
+
+xgb_dm_full_preds <- xgb_dm_full_preds[[1]][2]
+
+xgb_dm_full_preds <- as.matrix(xgb_dm_full_preds)
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_dm_total_score <- Score(list('LRM NULL' = fit0_dm,
+                              'LRM Simple' = fit_dm_simple,
+                              "LRM Socio + Comorbidities" = fit_dm_noexp,
+                              'LRM Full' = fit_dm_arv,
+                              'Xgboost Full' = xgb_dm_full_preds), 
+                               formula = surv_dm3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+
+plotCalibration(fit_dm_total_score, models = "Xgboost Full", rug = F, auc.in.legend = F, brier.in.legend = F, xlab = "Predicted risk of dying from diabetes", ylab = "Observed frequency of the predicted risk", col = c("#56B4E9", "#CC79A7"), round = F)
+
+plotCalibration(fit_dm_total_score, models = c("Xgboost Full", "LRM Full"), rug = F, auc.in.legend = F, brier.in.legend = F, xlab = "Predicted risk of dying from diabetes", ylab = "Observed frequency of the predicted risk", col = c("#56B4E9", "#CC79A7"), round = F)
+```
+
+#### Digestive
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_digestive_recipe <- recipe(surv_digestive3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_digestive_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_digestive_wf <- workflow(xg_digestive_recipe, xgb_digestive_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_digestive_rs <- tune_race_anova(xgb_digestive_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_digestive_rs)
+
+#Grid of hyperparameters
+show_best(xgb_digestive_rs)
+
+
+#finalize workflow
+xgb_digestive_last <- xgb_digestive_wf |> 
+    finalize_workflow(select_best(xgb_digestive_rs, metric ='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_digestive_last |> collect_metrics()
+
+#predictions
+xgb_digestive_last |> collect_predictions()
+
+
+
+#group
+xgb_digestive_full_preds <- xgb_digestive_last$.predictions
+
+xgb_digestive_full_preds <- xgb_digestive_full_preds[[1]][2]
+
+xgb_digestive_full_preds <- as.matrix(xgb_digestive_full_preds)
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_digestive_total_score <- Score(list('LRM NULL' = fit0_digestive,
+                              'LRM Simple' = fit_digestive_simple,
+                              "LRM Socio + Comorbidities" = fit_digestive_noexp,
+                              'LRM Full' = fit_digestive_arv,
+                              'Xgboost Full' = xgb_digestive_full_preds), 
+                               formula = surv_digestive3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+```
+
+#### Psychiatric
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_psychiatric_recipe <- recipe(surv_psychiatric3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_psychiatric_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_psychiatric_wf <- workflow(xg_psychiatric_recipe, xgb_psychiatric_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_psychiatric_rs <- tune_race_anova(xgb_psychiatric_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_psychiatric_rs)
+
+#Grid of hyperparameters
+show_best(xgb_psychiatric_rs)
+
+
+#finalize workflow
+xgb_psychiatric_last <- xgb_psychiatric_wf |> 
+    finalize_workflow(select_best(xgb_psychiatric_rs, metric ='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_psychiatric_last |> collect_metrics()
+
+#predictions
+xgb_psychiatric_last |> collect_predictions()
+
+
+#group
+xgb_psychiatric_full_preds <- xgb_psychiatric_last$.predictions
+
+xgb_psychiatric_full_preds <- xgb_psychiatric_full_preds[[1]][2]
+
+xgb_psychiatric_full_preds <- as.matrix(xgb_psychiatric_full_preds)
+
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_psychiatric_total_score <- Score(list('LRM NULL' = fit0_psychiatric,
+                              'LRM Simple' = fit_psychiatric_simple,
+                              "LRM Socio + Comorbidities" = fit_psychiatric_noexp,
+                              'LRM Full' = fit_psychiatric_arv,
+                              'Xgboost Full' = xgb_psychiatric_full_preds), 
+                               formula = surv_psychiatric3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+
+psychiatric_calibration <- plotCalibration(fit_psychiatric_total_score, models = "Xgboost Full", rug = F, auc.in.legend = F, brier.in.legend = F, xlab = "Predicted risk of dying from psychiatric diseases and suicide", ylab = "Observed frequency of the predicted risk", col = c("#56B4E9", "#CC79A7"), round = F)
+
+```
+
+##### 
+
+#### Respiratory
+
+```{r}
+#writing recipe for the formula and making the dummy variables
+xg_respiratory_recipe <- recipe(surv_respiratory3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+                           children_n.factor + comorbidities_factor +
+                           immigration_status + average_inpatient +
+                           average_outpatient + average_prescription +
+                           average_primarycare + average_residential +
+                           average_homecare, data = df_train) |> 
+  step_dummy(all_nominal_predictors(),one_hot = T)
+
+#xg boost with computation engine: xgboost
+xgb_respiratory_spec <- boost_tree(trees = tune(),
+                              mtry = tune(),
+                              min_n = tune(),
+                              tree_depth = tune(),
+                              stop_iter = tune(),
+                              learn_rate = tune()
+                              ) |> 
+                              set_engine("xgboost", validation = 0.2) |> 
+                              set_mode("classification")
+
+#workflow
+xgb_respiratory_wf <- workflow(xg_respiratory_recipe, xgb_respiratory_spec)
+
+
+#tune hyperparameters (defines how our model is structured). Use the train df with crossvalidation.
+
+set.seed(29)
+
+doParallel::registerDoParallel()
+
+xgb_respiratory_rs <- tune_race_anova(xgb_respiratory_wf,
+                          df_train_cv,
+                          grid = 30,
+                          metrics = metric_set(brier_class),
+                          control = control_race(verbose_elim = TRUE))
+
+#plot results
+plot_race(xgb_respiratory_rs)
+
+#Grid of hyperparameters
+show_best(xgb_respiratory_rs)
+
+
+#finalize workflow
+xgb_respiratory_last <- xgb_respiratory_wf |> 
+    finalize_workflow(select_best(xgb_respiratory_rs, metric='brier_class')) |> 
+    last_fit(df_split)
+
+#metrics
+xgb_respiratory_last |> collect_metrics()
+
+#predictions
+xgb_respiratory_last |> collect_predictions()
+
+
+#group
+xgb_respiratory_full_preds <- xgb_respiratory_last$.predictions
+
+xgb_respiratory_full_preds <- xgb_respiratory_full_preds[[1]][2]
+
+xgb_respiratory_full_preds <- as.matrix(xgb_respiratory_full_preds)
+
+
+#Specify datadist
+dd <- datadist(df_train)
+
+options(datadist = "dd")
+
+# evaluate performance
+fit_respiratory_total_score <- Score(list('LRM NULL' = fit0_resp,
+                              'LRM Simple' = fit_resp_simple,
+                              "LRM Socio + Comorbidities" = fit_resp_noexp,
+                              'LRM Full' = fit_resp_arv,
+                              'Xgboost Full' = xgb_respiratory_full_preds), 
+                               formula = surv_respiratory3 ~ 1,
+                               data = df_test,
+                               summary = 'ipa', plots = 'calibration',
+                               metrics = c('AUC', 'brier'), 
+                               se.fit = T)
+
+plotCalibration(fit_respiratory_total_score, models = c("Xgboost Full", "LRM Full"), rug = F, auc.in.legend = F, brier.in.legend = F, xlab = "Predicted risk of dying from respiratory diseases", ylab = "Observed frequency of the predicted risk", col = c("#56B4E9", "#CC79A7"))
+```
+
+## Evaluating the AUC and brier score
+
+Evaluating the model performance with the AUC, brier score and IPA.
+
+### AUC
+
+```{r}
+df_AUC_cancer <- fit_cancer_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Cancer")
+
+
+df_AUC_cv <- fit_cvd_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "CV")
+
+df_AUC_neuro <- fit_neuro_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Neuro")
+
+df_AUC_dm <- fit_dm_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Diabetes")
+
+df_AUC_digestive <- fit_digestive_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Diagestive")
+
+df_AUC_psychiatric <- fit_psychiatric_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Psychiatric")
+
+df_AUC_resp <- fit_respiratory_total_score$AUC$score |> 
+  as.data.frame() |> 
+  mutate(AUC = round(AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Respiratory")
+
+
+df_AUC_together <- df_AUC_cancer |> 
+  full_join(df_AUC_cv) |> 
+  full_join(df_AUC_neuro) |> 
+  full_join(df_AUC_dm) |> 
+  full_join(df_AUC_digestive) |> 
+  full_join(df_AUC_psychiatric) |> 
+  full_join(df_AUC_resp) |> 
+  select(Cause, model, AUC, lower, upper)
+
+write.xlsx(df_AUC_together, "....xlsx")
+```
+
+### Delta AUC
+
+```{r}
+
+df_AUC_cancer <- fit_cancer_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |> 
+  mutate(Cause = "Cancer")
+
+df_AUC_cv <- fit_cvd_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "CV")
+
+df_AUC_neuro <- fit_neuro_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Neuro")
+
+df_AUC_dm <- fit_dm_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Diabetes")
+
+df_AUC_digestive <- fit_digestive_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Diagestive")
+
+
+df_AUC_psychiatric <- fit_psychiatric_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Psychiatric")
+
+df_AUC_resp <- fit_respiratory_total_score$AUC$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.AUC = round(delta.AUC * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Respiratory")
+
+
+df_delta_AUC_together <- df_AUC_cancer |> 
+  full_join(df_AUC_cv) |> 
+  full_join(df_AUC_neuro) |> 
+  full_join(df_AUC_dm) |> 
+  full_join(df_AUC_digestive) |> 
+  full_join(df_AUC_psychiatric) |> 
+  full_join(df_AUC_resp) |> 
+  select(Cause, model, reference, delta.AUC, lower, upper)
+
+
+write.xlsx(df_delta_AUC_together, "....xlsx")
+
+```
+
+### Brier
+
+```{r}
+df_brier_cancer <- fit_cancer_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Cancer")
+
+df_brier_cv <- fit_cvd_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "CV")
+
+df_brier_neuro <- fit_neuro_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Neuro")
+
+df_brier_dm <- fit_dm_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Diabetes")
+
+df_brier_digestive <- fit_digestive_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Digestive")
+
+
+df_brier_psychiatric <- fit_psychiatric_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Psychiatric")
+
+df_brier_resp <- fit_respiratory_total_score$Brier$score |> 
+  as.data.frame() |> 
+  mutate(Brier = round(Brier * 100,2), 
+         upper = round(upper * 100,2), 
+         lower = round(lower*100,2)) |>
+  mutate(Cause = "Respiratory")
+
+
+df_brier_together2 <- df_brier_cancer |> 
+  full_join(df_brier_cv) |> 
+  full_join(df_brier_neuro) |> 
+  full_join(df_brier_dm) |> 
+  full_join(df_brier_digestive) |> 
+  full_join(df_brier_psychiatric) |> 
+  full_join(df_brier_resp) |> 
+  select(Cause, model, Brier, lower, upper, IPA)
+
+
+write.xlsx(df_brier_together2, "....xlsx")
+```
+
+### Delta brier
+
+```{r}
+df_brier_cancer <- fit_cancer_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "Cancer")
+
+df_brier_cv <- fit_cvd_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "CV")
+
+df_brier_neuro <- fit_neuro_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "Neuro")
+
+df_brier_dm <- fit_dm_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "Diabetes")
+
+df_brier_digestive <- fit_digestive_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "Digestive")
+
+
+df_brier_psychiatric <- fit_psychiatric_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "Psychiatric")
+
+df_brier_resp <- fit_respiratory_total_score$Brier$contrasts |> 
+  as.data.frame() |> 
+  mutate(delta.Brier = round(delta.Brier * 100,5), 
+         upper = round(upper * 100,5), 
+         lower = round(lower*100,5)) |>
+  mutate(Cause = "Respiratory")
+
+
+df_brier_together <- df_brier_cancer |> 
+  full_join(df_brier_cv) |> 
+  full_join(df_brier_neuro) |> 
+  full_join(df_brier_dm) |> 
+  full_join(df_brier_digestive) |> 
+  full_join(df_brier_psychiatric) |> 
+  full_join(df_brier_resp) |> 
+  select(Cause, model, reference, delta.Brier, lower, upper)
+
+
+write.xlsx(df_brier_together, "....xlsx")
+```
+
+# Decision curves
+
+```{r}
+library(dcurves)
+
+#cancer
+df_test$cancer_simple <- predictRisk(fit_cancer_simple, newdata = df_test)
+df_test$cancer_socio <- predictRisk(fit_cancer_noexp, newdata = df_test)
+df_test$cancer_full <- predictRisk(fit_cancer_arv, newdata = df_test)
+df_test$cancer_xgb <- xgb_cancer_full_preds
+
+dc_cancer <- dca(surv_cancer3 ~ cancer_simple + cancer_socio + cancer_full + cancer_xgb, 
+                 data = df_test, 
+                 thresholds = seq(0, 0.5, by = 0.05),
+                 label = list (cancer_simple = "LRM simple",
+                               cancer_socio = "LRM socio+comorbidity",
+                               cancer_full = "LRM full",
+                               cancer_xgb = "XGBoost full")) |> 
+                  plot(smooth=TRUE)
+
+dc_cancer <- dc_cancer + theme_set(theme_minimal(base_family = "Times New Roman")) +  theme(legend.position = "top") + scale_color_manual(values = m_color) + scale_fill_manual(values = m_color) + theme(axis.text = element_text(size = 12), legend.text = element_text(size = 1), axis.title = element_text(size = 14))
+
+
+#cvd
+df_test$cv_simple <- predictRisk(fit_cv_simple, newdata = df_test)
+df_test$cv_socio <- predictRisk(fit_cv_noexp, newdata = df_test)
+df_test$cv_full <- predictRisk(fit_cv_arv, newdata = df_test)
+df_test$cv_xgb <- xgb_CVD_full_preds
+
+dc_cv <- dca(surv_CVD3 ~ cv_simple + cv_socio + cv_full + cv_xgb, 
+                 data = df_test, 
+                 thresholds = seq(0, 0.5, by = 0.05),
+                 label = list (cv_simple = "LRM simple",
+                               cv_socio = "LRM socio+comorbidity",
+                               cv_full = "LRM full",
+                               cv_xgb = "XGBoost full")) |> 
+  plot(smooth=TRUE)
+
+
+dc_cv <- dc_cv + theme_set(theme_minimal(base_family = "Times New Roman")) +  theme(legend.position = "topleft") +  scale_color_manual(values = m_color) + scale_fill_manual(values = m_color) + theme(axis.text = element_text(size = 12), legend.text = element_text(size = 14), axis.title = element_text(size = 14))
+
+
+
+#neuro
+
+df_test$neuro_simple <- predictRisk(fit_neuro_simple, newdata = df_test)
+df_test$neuro_socio <- predictRisk(fit_neuro_noexp, newdata = df_test)
+df_test$neuro_full <- predictRisk(fit_neuro_arv, newdata = df_test)
+df_test$neuro_xgb <- xgb_neuro_full_preds
+
+dc_neuro <- dca(surv_neuro3 ~ neuro_simple + neuro_socio + neuro_full + neuro_xgb, 
+                 data = df_test, 
+                 thresholds = seq(0, 0.5, by = 0.05),
+                 label = list (neuro_simple = "LRM simple",
+                               neuro_socio = "LRM socio+comorbidity",
+                               neuro_full = "LRM full",
+                               neuro_xgb = "XGBoost full")) |> 
+  plot(smooth=TRUE)
+
+
+dc_neuro <- dc_neuro + theme_set(theme_minimal(base_family = "Times New Roman")) +  theme(legend.position = "topleft") +  scale_color_manual(values = m_color) + scale_fill_manual(values = m_color) + theme(axis.text = element_text(size = 12), legend.text = element_text(size = 14), axis.title = element_text(size = 14))
+
+#resp
+
+df_test$resp_simple <- predictRisk(fit_resp_simple, newdata = df_test)
+df_test$resp_socio <- predictRisk(fit_resp_noexp, newdata = df_test)
+df_test$resp_full <- predictRisk(fit_resp_arv, newdata = df_test)
+df_test$resp_xgb <- xgb_respiratory_full_preds
+
+dc_resp <- dca(surv_respiratory3 ~ resp_simple + resp_socio + resp_full + resp_xgb, 
+                 data = df_test, 
+                 thresholds = seq(0, 0.5, by = 0.05),
+                 label = list (resp_simple = "LRM simple",
+                               resp_socio = "LRM socio+comorbidity",
+                               resp_full = "LRM full",
+                               resp_xgb = "XGBoost full")) |> 
+  plot(smooth=TRUE)
+
+
+dc_resp <- dc_resp + theme_set(theme_minimal(base_family = "Times New Roman")) +  theme(legend.position = "topleft") +  scale_color_manual(values = m_color) + scale_fill_manual(values = m_color) + theme(axis.text = element_text(size = 12), legend.text = element_text(size = 14), axis.title = element_text(size = 14))
+
+
+
+all <- (dc_cancer + dc_cv) / (dc_neuro + dc_resp)
+
+all
+
+
+#to see the data
+dc_cancer$data
+
+```

@@ -113,10 +113,11 @@ df |> janitor::tabyl(surv_cancer3)
 levels(df$surv_overall)[levels(df$surv_overall)== 0] <- 'Alive'
 levels(df$surv_overall)[levels(df$surv_overall)== 1] <- 'Dead'
 
-# Also the sex variable
+# Also the sex variable and keep only the bereaved individuals
 df <- df %>% 
   mutate(sex = if_else(KOEN == 2, "Females", "Males")) %>% 
-  mutate_at(vars(sex),as.factor)
+  mutate_at(vars(sex),as.factor) %>%
+  filter(bereaved01 == 1)
 ```
 
 ## Prediction
@@ -254,13 +255,13 @@ options(datadist = "dd")
 fit0_cancer <- glm(surv_cancer3 ~ 1, data = df_train, family = "binomial",x = T, y = T)
 
 #simple model with age and sex
-fit_cancer_simple <- lrm(surv_cancer3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_cancer_simple <- lrm(surv_cancer3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_cancer_noexp <- lrm(surv_cancer3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T) 
+fit_cancer_noexp <- lrm(surv_cancer3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T) 
 
 #model with expenditures as arv.
-fit_cancer_arv <- lrm(surv_cancer3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient,3) + rcs(average_outpatient,3) +  rcs(average_prescription,3) + rcs(average_primarycare,3) + rcs(average_residential,3) + rcs(average_homecare,3), data = df_train, x = T, y = T)
+fit_cancer_arv <- lrm(surv_cancer3 ~ affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient,3) + rcs(average_outpatient,3) +  rcs(average_prescription,3) + rcs(average_primarycare,3) + rcs(average_residential,3) + rcs(average_homecare,3), data = df_train, x = T, y = T)
 
 
 #check spline possible fit
@@ -300,13 +301,13 @@ plotCalibration(fit_cancer_total_score, models = "LRM Full Model, each arv exp")
 fit0_cv <- glm(surv_CVD3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
 
 #simple model with age and sex
-fit_cv_simple <- lrm(surv_CVD3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_cv_simple <- lrm(surv_CVD3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_cv_noexp <- lrm(surv_CVD3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+fit_cv_noexp <- lrm(surv_CVD3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
 
 #model with expenditures as arv.
-fit_cv_arv <- lrm(surv_CVD3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+fit_cv_arv <- lrm(surv_CVD3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
             data = df_train, x = T, y = T)
 ```
 
@@ -336,13 +337,13 @@ plotCalibration(fit_cv_total_score, models = "LRM Simple Model")
 fit0_neuro <- glm(surv_neuro3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
 
 #simple model with age and sex
-fit_neuro_simple <- lrm(surv_neuro3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_neuro_simple <- lrm(surv_neuro3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_neuro_noexp <- lrm(surv_neuro3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+fit_neuro_noexp <- lrm(surv_neuro3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
 
 #model with expenditures as arv.
-fit_neuro_arv <- lrm(surv_neuro3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+fit_neuro_arv <- lrm(surv_neuro3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
             data = df_train, x = T, y = T)
 ```
 
@@ -372,13 +373,13 @@ plotCalibration(fit_neuro_total_score)
 fit0_dm <- glm(surv_dm3 ~ 1, data = df_train, family = "binomial")
 
 #simple model with age and sex
-fit_dm_simple <- lrm(surv_dm3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_dm_simple <- lrm(surv_dm3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_dm_noexp <- lrm(surv_dm3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+fit_dm_noexp <- lrm(surv_dm3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
 
 #model with expenditures as arv.
-fit_dm_arv <- lrm(surv_dm3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+fit_dm_arv <- lrm(surv_dm3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
             data = df_train, x = T, y = T)
 ```
 
@@ -410,13 +411,13 @@ plot(nomogram(fit_dm_arv, fun = plogis, funlabel = paste0("Risk of Diabetes")))
 fit0_digestive <- glm(surv_digestive3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
 
 #simple model with age and sex
-fit_digestive_simple <- lrm(surv_digestive3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_digestive_simple <- lrm(surv_digestive3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_digestive_noexp <- lrm(surv_digestive3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+fit_digestive_noexp <- lrm(surv_digestive3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
 
 #model with expenditures as arv.
-fit_digestive_arv <- lrm(surv_digestive3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+fit_digestive_arv <- lrm(surv_digestive3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
             data = df_train, x = T, y = T)
 ```
 
@@ -448,13 +449,13 @@ plot(nomogram(fit_digestive_arv, fun = plogis, funlabel = paste0("Risk of digest
 fit0_psychiatric <- glm(surv_psychiatric3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
 
 #simple model with age and sex
-fit_psychiatric_simple <- lrm(surv_psychiatric3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_psychiatric_simple <- lrm(surv_psychiatric3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_psychiatric_noexp <- lrm(surv_psychiatric3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)
+fit_psychiatric_noexp <- lrm(surv_psychiatric3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)
 
 #model with expenditures as arv.
-fit_psychiatric_arv <- lrm(surv_psychiatric3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+fit_psychiatric_arv <- lrm(surv_psychiatric3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
             data = df_train, x = T, y = T)
 ```
 
@@ -485,13 +486,13 @@ plot(nomogram(fit_psychiatric_arv, fun = plogis, funlabel = paste0("Risk of psyc
 fit0_resp <- glm(surv_respiratory3 ~ 1, data = df_train, family = "binomial", x = T, y = T)
 
 #simple model with age and sex
-fit_resp_simple <- lrm(surv_respiratory3 ~ bereaved01 + sex + age_bereavement.factor, data = df_train, x = T, y = T)
+fit_resp_simple <- lrm(surv_respiratory3 ~  sex + age_bereavement.factor, data = df_train, x = T, y = T)
 
 # model with sociodemographics + number of comorbidities
-fit_resp_noexp <- lrm(surv_respiratory3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
+fit_resp_noexp <- lrm(surv_respiratory3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status, data = df_train, x = T, y = T)  
 
 #model with expenditures as arv.
-fit_resp_arv <- lrm(surv_respiratory3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
+fit_resp_arv <- lrm(surv_respiratory3 ~  affluence.factor + sex + age_bereavement.factor + children_n.factor + comorbidities_factor + immigration_status + rcs(average_inpatient, 3) +rcs(average_outpatient, 3) +  rcs(average_prescription, 3) + rcs(average_primarycare, 3) + rcs(average_residential,3) + rcs(average_homecare,3), 
             data = df_train, x = T, y = T)
 ```
 
@@ -539,7 +540,7 @@ For this analysis the outcome must be a factor. Catagorical predictors should ha
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_cancer_recipe <- recipe(surv_cancer3 ~ bereaved01 + affluence.factor + sex + age_bereavement.factor + 
+xg_cancer_recipe <- recipe(surv_cancer3 ~  affluence.factor + sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -628,7 +629,7 @@ plotCalibration(fit_cancer_total_score, models =  c("Xgboost Full", "LRM Full"),
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_CVD_recipe <- recipe(surv_CVD3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+xg_CVD_recipe <- recipe(surv_CVD3 ~  affluence.factor +                            sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -714,7 +715,7 @@ plotCalibration(fit_cvd_total_score, models = c("Xgboost Full", "LRM Full"), rug
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_neuro_recipe <- recipe(surv_neuro3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+xg_neuro_recipe <- recipe(surv_neuro3 ~  affluence.factor +                            sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -799,7 +800,7 @@ plotCalibration(fit_neuro_total_score, models = c("Xgboost Full", "LRM Full"), r
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_dm_recipe <- recipe(surv_dm3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+xg_dm_recipe <- recipe(surv_dm3 ~  affluence.factor +                            sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -887,7 +888,7 @@ plotCalibration(fit_dm_total_score, models = c("Xgboost Full", "LRM Full"), rug 
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_digestive_recipe <- recipe(surv_digestive3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+xg_digestive_recipe <- recipe(surv_digestive3 ~  affluence.factor +                            sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -972,7 +973,7 @@ fit_digestive_total_score <- Score(list('LRM NULL' = fit0_digestive,
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_psychiatric_recipe <- recipe(surv_psychiatric3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+xg_psychiatric_recipe <- recipe(surv_psychiatric3 ~  affluence.factor +                            sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -1062,7 +1063,7 @@ psychiatric_calibration <- plotCalibration(fit_psychiatric_total_score, models =
 
 ```{r}
 #writing recipe for the formula and making the dummy variables
-xg_respiratory_recipe <- recipe(surv_respiratory3 ~ bereaved01 + affluence.factor +                            sex + age_bereavement.factor + 
+xg_respiratory_recipe <- recipe(surv_respiratory3 ~  affluence.factor +                            sex + age_bereavement.factor + 
                            children_n.factor + comorbidities_factor +
                            immigration_status + average_inpatient +
                            average_outpatient + average_prescription +
@@ -1418,6 +1419,7 @@ write.xlsx(df_brier_together, "....xlsx")
 ```
 
 # Decision curves
+The paper includes decision curves for all causes of death. Here some examples are presented
 
 ```{r}
 library(dcurves)
